@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+# models & weights (never in repo)
+*.gguf
+*.mmproj
+models/
+# logs
+logs/
+*.log
+bench/results/
+# local state
+slots.json
+overrides.json

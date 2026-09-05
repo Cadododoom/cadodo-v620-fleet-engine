@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint (ruff)
+        run: uvx ruff check fleet_engine
+      - name: Unit tests (pytest)
+        run: |
+          uv pip install --system pytest
+          python -m pytest fleet_engine/tests -v
