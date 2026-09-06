@@ -12,7 +12,7 @@ from fleet_engine.config_store import (
     slot_from_dict,
     slot_to_dict,
 )
-from fleet_engine.runtime import build_llama_server_cmd
+from fleet_engine.runtime_cmd import build_llama_server_cmd
 
 
 def production_like_slot() -> SlotConfig:

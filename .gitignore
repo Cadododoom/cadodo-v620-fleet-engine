@@ -17,3 +17,5 @@ bench/results/
 # local state
 slots.json
 overrides.json
+pids/
+devstate/

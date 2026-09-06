@@ -15,7 +15,7 @@ plugs into Hermes Agent Desktop / OpenCode Desktop automatically.
 |---|---|
 | Slot Detector (gfx1031 filter, up to 16) | **v1.0** (sysfs + engine HIP probe) |
 | Config Store (`slots.json`, atomic, schema v1) | **v1.0** (+ detection merge) |
-| Runtime Manager (spawn/stop/health/restart) | skeleton (cmd builder **v0.1**) |
+| Runtime Manager (spawn/stop/health/restart, supervisor) | **v1.0** (absorbs gpuN.sh logic; auto-restart w/ backoff) |
 | Model Registry (GGUF folder scan) | Phase 4 |
 | Control UI (16-slot grid, live rates, VRAM/power) | Phase 5 |
 | Connector (Hermes / OpenCode / custom) | Phases 6-7 |
@@ -46,6 +46,37 @@ numbered by PCI bus address and `hip_index` is left unknown for the user to
 assign. With the probe, each HIP index is resolved to a card name and matched
 against the V620s found in sysfs; the runtime re-verifies the pinned card at
 start time, so a mis-match fails loudly.
+
+### Runtime control (Phase 3)
+
+Each managed fleet has a **state dir** holding `slots.json`, `pids/`, and
+`logs/`. `slots.json` is the single source of truth for what runs.
+
+```sh
+# start slot 1 (or all slots) under a detached supervisor
+python -m fleet_engine start --state-dir ./devstate \
+  --slot 1 \
+  --llama-bin /path/to/llama-server \
+  --roc-vendor /path/to/roc-vendor-libs
+
+# status table (pid, supervisor, port, /health)
+python -m fleet_engine status --state-dir ./devstate
+
+# stop (idempotent; SIGTERM supervisor + server, SIGKILL fallback)
+python -m fleet_engine stop --state-dir ./devstate --slot 1
+python -m fleet_engine restart --state-dir ./devstate --slot 1
+```
+
+Behavior notes:
+- **Supervisor**: each slot runs under a detached `fleet_engine
+  runtime-supervisor` process. On server crash it relaunches with backoff
+  (2/4/8/16 s, capped; resets after 10 min uptime) and gives up after 8
+  crashes in a rolling 10-min window, leaving a `GIVEUP` line in the log.
+- **Stop** SIGTERMs the supervisor first (it owns and terminates its own
+  server child), then the server, then waits and escalates to SIGKILL.
+  Verified: kill -9 of a live server auto-recovers in ~5 s end-to-end.
+- **Dev-only by default**: campaign dev slots use ports 45700+ and their own
+  state dir; production lanes (45600-45603) are never touched.
 
 ## Development
 
