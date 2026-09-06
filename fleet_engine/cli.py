@@ -52,6 +52,24 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_models(args: argparse.Namespace) -> int:
+    from .model_registry import scan_models
+
+    infos = scan_models(args.dirs, max_files=args.max_files)
+    if not infos:
+        print("no .gguf files found", file=sys.stderr)
+        return 1
+    print(f"{'name':<46} {'quant':<11} {'arch':<12} {'ctx':>7} {'embd':>6} {'size':>8}")
+    for m in sorted(infos, key=lambda x: x.name.lower()):
+        print(
+            f"{m.name:<46} {m.quant:<11} {m.arch:<12} {m.native_ctx:>7} "
+            f"{m.embedding_length:>6} {m.size_bytes / 1e9:>7.2f}G"
+        )
+        if not args.compact:
+            print(f"  {m.path}")
+    return 0
+
+
 def _runtime(args: argparse.Namespace) -> Runtime:
     return Runtime(
         state_dir=args.state_dir,
@@ -154,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--slots-json", default=None, help="merge results into this slots.json")
     d.add_argument("--no-probe", action="store_true", help="sysfs scan only, no engine probe")
     d.set_defaults(func=cmd_detect)
+
+    m = sub.add_parser("models", help="scan GGUF folders, print metadata table")
+    m.add_argument("dirs", nargs="+", help="GGUF folder(s) to scan")
+    m.add_argument("--max-files", type=int, default=500)
+    m.add_argument("--compact", action="store_true", help="hide full paths")
+    m.set_defaults(func=cmd_models)
 
     for name, func, help_ in (
         ("start", cmd_start, "spawn slot(s) under a supervisor"),
