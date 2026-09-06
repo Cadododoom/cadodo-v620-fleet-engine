@@ -13,8 +13,8 @@ plugs into Hermes Agent Desktop / OpenCode Desktop automatically.
 
 | Module | State |
 |---|---|
-| Slot Detector (gfx1031 filter, up to 16) | Phase 2 |
-| Config Store (`slots.json`, atomic, schema v1) | **v0.1** |
+| Slot Detector (gfx1031 filter, up to 16) | **v1.0** (sysfs + engine HIP probe) |
+| Config Store (`slots.json`, atomic, schema v1) | **v1.0** (+ detection merge) |
 | Runtime Manager (spawn/stop/health/restart) | skeleton (cmd builder **v0.1**) |
 | Model Registry (GGUF folder scan) | Phase 4 |
 | Control UI (16-slot grid, live rates, VRAM/power) | Phase 5 |
@@ -30,6 +30,22 @@ Qwen3.8-27B UD-IQ4_XS, MTP3 + ngram-mod combined speculation, q4_0 KV,
 YARN 2x: **32.7 tok/s** decode (legacy launcher, commit ee41df8). The engine's
 command builder reproduces those flags exactly (see
 `fleet_engine/tests/test_config_and_cmd.py`).
+
+## CLI
+
+```sh
+# detect V620 slots (sysfs scan + per-HIP llama-server --list-devices probe)
+python -m fleet_engine detect \
+  --llama-bin /path/to/llama-server \
+  --roc-vendor /path/to/roc-vendor-libs \
+  --slots-json ./slots.json
+```
+
+Without `--llama-bin` the detector falls back to a sysfs-only scan: slots are
+numbered by PCI bus address and `hip_index` is left unknown for the user to
+assign. With the probe, each HIP index is resolved to a card name and matched
+against the V620s found in sysfs; the runtime re-verifies the pinned card at
+start time, so a mis-match fails loudly.
 
 ## Development
 

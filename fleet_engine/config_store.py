@@ -43,6 +43,7 @@ class SlotConfig:
     slot: int
     name: str
     gpu: int
+    pci_addr: Optional[str] = None
     host: str = "0.0.0.0"
     port: int = DEFAULT_DEV_PORT_BASE
     model: str = ""
@@ -110,6 +111,33 @@ class ConfigStore:
             if os.path.exists(tmp):
                 os.unlink(tmp)
             raise
+
+    def merge_detection(self, detection: Any) -> dict[str, Any]:
+        """Merge a detector.Detection result into slots.json: fill gpu/name/
+        pci_addr for missing slots, preserve any user edits on existing slots,
+        and record detection metadata. Takes the Detection dataclass (or a
+        plain list of DetectedSlot)."""
+        slots = detection.slots if hasattr(detection, "slots") else detection
+        probe_ok = getattr(detection, "probe_ok", None)
+        probe_error = getattr(detection, "probe_error", None)
+        data = self.load()
+        existing = data.setdefault("slots", {})
+        for det in slots:
+            key = str(det.slot)
+            entry = existing.get(key)
+            if entry is None:
+                entry = {"slot": det.slot, "name": det.name, "gpu": det.hip_index or 0}
+                existing[key] = entry
+            elif entry.get("gpu") in (None, 0) and det.hip_index is not None:
+                entry["gpu"] = det.hip_index
+            entry.setdefault("name", det.name)
+            entry["pci_addr"] = det.pci_addr
+        data["detected"] = {
+            "count": len(slots),
+            "probe_ok": probe_ok,
+            "probe_error": probe_error,
+        }
+        return data
 
     def get_slot(self, slot: int) -> SlotConfig:
         data = self.load()
