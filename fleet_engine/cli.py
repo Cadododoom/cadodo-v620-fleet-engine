@@ -367,6 +367,46 @@ def cmd_opc_turn(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_tuner_list(args: argparse.Namespace) -> int:
+    from .tuner import summary_lines
+
+    for line in summary_lines():
+        print(line)
+    return 0
+
+
+def cmd_tuner_show(args: argparse.Namespace) -> int:
+    from .config_store import ConfigStore
+    from .tuner import preset, preset_cmd
+
+    p = preset(args.preset)
+    if args.state_dir:
+        store = ConfigStore(args.state_dir)
+        cfg = store.get_slot(args.slot)
+        cmd = preset_cmd(cfg, p, llama_bin=args.llama_bin or "llama-server")
+    else:
+        # No state dir: print the canonical production-parity argv for the preset
+        # so the doc can be reproduced from the repo alone.
+        from .config_store import SlotConfig
+        from .tuner import BASE_SPEC
+        cfg = SlotConfig(
+            slot=args.slot, name="dev", gpu=args.gpu, port=45800,
+            model="<path-to-model.gguf>", ctx=528384,
+            rope_scale=2.0157, yarn_orig_ctx=262144, spec=BASE_SPEC,
+        )
+        cmd = preset_cmd(cfg, p)
+    print(" \\\n  ".join(cmd))
+    return 0
+
+
+def _add_tuner_opts(p: argparse.ArgumentParser, need_slot: bool) -> None:
+    p.add_argument("--state-dir", default=None, help="runtime state dir with slots.json")
+    if need_slot:
+        p.add_argument("--slot", type=int, default=1, help="slot to render argv from")
+    p.add_argument("--gpu", type=int, default=2, help="gpu for the no-state-dir template")
+    p.add_argument("--llama-bin", default=None, help="path to llama-server in argv")
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     """Run the standardized benchmark suite against one or more endpoints.
 
@@ -526,6 +566,14 @@ def build_parser() -> argparse.ArgumentParser:
                             help="path to opencode binary for a real end-to-end turn")
             cp.add_argument("--prompt", default="Reply with the single word: ok")
         cp.set_defaults(func=func)
+
+    t = sub.add_parser("tuner-list", help="print the measured tuning option matrix")
+    t.set_defaults(func=cmd_tuner_list)
+
+    ts = sub.add_parser("tuner-show", help="print full llama-server argv for one preset")
+    ts.add_argument("preset", help="preset name (see tuner-list)")
+    _add_tuner_opts(ts, need_slot=True)
+    ts.set_defaults(func=cmd_tuner_show)
 
     b = sub.add_parser("bench", help="run the standardized benchmark suite")
     b.add_argument("--endpoint", default=None,

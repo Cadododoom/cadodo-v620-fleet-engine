@@ -16,11 +16,11 @@ plugs into Hermes Agent Desktop / OpenCode Desktop automatically.
 | Slot Detector (gfx1031 filter, up to 16) | **v1.0** (sysfs + engine HIP probe) |
 | Config Store (`slots.json`, atomic, schema v1) | **v1.0** (+ detection merge) |
 | Runtime Manager (spawn/stop/health/restart, supervisor) | **v1.0** (absorbs gpuN.sh logic; auto-restart w/ backoff) |
-| Model Registry (GGUF folder scan) | Phase 4 |
-| Control UI (16-slot grid, live rates, VRAM/power) | Phase 5 |
-| Connector (Hermes / OpenCode / custom) | Phases 6-7 |
-| Benchmark suite (prefill/decode/spec-acceptance) | Phase 8 |
-| V620 Tuner (measured-safe option matrix) | Phase 9 |
+| Model Registry (GGUF folder scan) | **v1.0** (v3 header, UD quant names) |
+| Control UI (16-slot grid, live rates, VRAM/power) | **v1.0** (tkinter, headless screenshot verified) |
+| Connector (Hermes / OpenCode / custom) | **v1.0** (block-scoped writers, drift watch, E2E turns) |
+| Benchmark suite (prefill/decode/spec-acceptance) | **v1.0** (prompt set v1.0-2026-09, 32.7 t/s baseline) |
+| V620 Tuner (measured-safe option matrix) | **v1.0** (tuner-list/tuner-show, docs/TUNING.md) |
 | Harness Auto-Link (PLAN II) | Phase 10 |
 | Envelope push (power-cap sweep) | Phase 11 |
 
