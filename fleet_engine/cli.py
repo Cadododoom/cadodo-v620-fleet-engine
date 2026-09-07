@@ -23,6 +23,7 @@ use ports 45700+ and their own state dir; production lanes are untouched.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -309,6 +310,63 @@ def cmd_conn_verify(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_opc_preview(args: argparse.Namespace) -> int:
+    from .opencode import provider_entry, provider_key
+    slots = _conn_slots(args)
+    if not slots:
+        print("no slots selected", file=sys.stderr)
+        return 1
+    for s in slots:
+        print(f"--- {provider_key(s)} ---")
+        print(json.dumps(provider_entry(s, host=args.host), indent=2))
+    return 0
+
+
+def cmd_opc_apply(args: argparse.Namespace) -> int:
+    from .opencode import apply as opc_apply
+    slots = _conn_slots(args)
+    if not slots:
+        print("no slots selected", file=sys.stderr)
+        return 1
+    changed = opc_apply(args.config, slots, host=args.host, dry_run=args.dry_run,
+                        backup=not args.no_backup, make_default=args.make_default)
+    mode = "DRY-RUN" if args.dry_run else "APPLIED"
+    print(f"[{mode}] changed: {', '.join(changed) if changed else 'none'}")
+    return 0
+
+
+def cmd_opc_drift(args: argparse.Namespace) -> int:
+    from .opencode import check_drift as opc_drift
+    slots = _conn_slots(args)
+    drifts = []
+    for s in slots:
+        drifts.extend(opc_drift(args.config, s, host=args.host))
+    if drifts:
+        for d in drifts:
+            print(f"DRIFT {d}")
+        return 2
+    print(f"no drift across {len(slots)} slot(s)")
+    return 0
+
+
+def cmd_opc_turn(args: argparse.Namespace) -> int:
+    from .opencode import chat_probe, model_id, opencode_turn, provider_key
+    slots = _conn_slots(args)
+    rc = 0
+    for s in slots:
+        ok, detail = chat_probe(s, host=args.host)
+        print(f"[{'ok' if ok else 'FAIL'}] {s.name} :{s.port} — {detail[:160]!r}")
+        if not ok:
+            rc = 1
+        if ok and args.opencode_bin:
+            ref = f"{provider_key(s)}/{model_id(s)}"
+            ok2, out = opencode_turn(args.opencode_bin, ref, args.prompt)
+            print(f"[{'ok' if ok2 else 'FAIL'}] opencode turn {ref} — {out[:160]!r}")
+            if not ok2:
+                rc = 1
+    return rc
+
+
 def _add_conn_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--state-dir", required=True, help="runtime state dir with slots.json")
     p.add_argument("--config", required=True, help="Hermes config.yaml path (managed blocks live here)")
@@ -387,6 +445,27 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("--dry-run", action="store_true", help="report changes without writing")
     ca.add_argument("--no-backup", action="store_true", help="skip the .bak timestamped copy")
     ca.set_defaults(func=cmd_conn_apply)
+
+    for name, func, help_ in (
+        ("opc-preview", cmd_opc_preview, "preview OpenCode provider entries (no writes)"),
+        ("opc-drift", cmd_opc_drift, "read-only OpenCode drift check"),
+        ("opc-turn", cmd_opc_turn, "chat probe via slot (optional real opencode turn)"),
+    ):
+        cp = sub.add_parser(name, help=help_)
+        _add_conn_opts(cp)
+        if name == "opc-turn":
+            cp.add_argument("--opencode-bin", default=None,
+                            help="path to opencode binary for a real end-to-end turn")
+            cp.add_argument("--prompt", default="Reply with the single word: ok")
+        cp.set_defaults(func=func)
+
+    oa = sub.add_parser("opc-apply", help="write OpenCode provider entries")
+    _add_conn_opts(oa)
+    oa.add_argument("--dry-run", action="store_true", help="report changes without writing")
+    oa.add_argument("--no-backup", action="store_true", help="skip the .bak timestamped copy")
+    oa.add_argument("--make-default", action="store_true",
+                    help="also set the top-level model to the first slot's provider/model")
+    oa.set_defaults(func=cmd_opc_apply)
     return p
 
 
