@@ -153,6 +153,90 @@ def cmd_supervisor(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Launch the control UI (tkinter). --screenshot dumps one rendered
+    frame to a file and exits (headless verification)."""
+    from .app import Panel
+    from .runtime import Runtime
+    from .ui import FleetModel
+
+    try:
+        import tkinter as tk
+    except ImportError:
+        print("tkinter not available on this platform", file=sys.stderr)
+        return 1
+
+    model = FleetModel()
+    runtime = None
+    if args.state_dir:
+        dev = FleetModel.for_dev(args.state_dir)
+        model.dev_slots = dev.dev_slots
+        model.dev_state_dir = args.state_dir
+        runtime = Runtime(state_dir=args.state_dir, llama_bin=args.llama_bin or "")
+    if args.fleet_dir:
+        model.prod_lanes = FleetModel.for_prod(args.fleet_dir).prod_lanes
+    model.refresh()
+    model.update_logs()
+    model.update_health()
+
+    root = tk.Tk()
+    Panel(root, model, runtime, state_dir=args.state_dir or "")
+    if args.screenshot:
+        root.update_idletasks()
+        root.update()
+        desc = _grab_screenshot(root, args.screenshot)
+        print(f"screenshot: {args.screenshot} ({desc})")
+        root.destroy()
+    else:
+        root.mainloop()
+    return 0
+
+
+def _grab_screenshot(root, path: str, settle_s: float = 1.0) -> str:
+    """Capture the live X window to `path` (PNG) via PIL.ImageGrab (X11
+    backend) and crop to the window's geometry. Returns a short description
+    (size/mode). Robust across X servers/visuals — no hand-rolled XWD binary
+    parsing (xwd emits v0/v1 depending on the build; ImageGrab handles both).
+
+    Before grabbing we pump the Tk event loop for `settle_s` seconds in small
+    steps: a bare sleep() does NOT process X events, so the window's Expose
+    would go unhandled and Xvfb returns a blank framebuffer on the first grab.
+    """
+    import os
+    import time
+
+    from PIL import ImageGrab
+
+    # Pump the event loop so the freshly-mapped window actually paints
+    # (Expose handled) before we read the framebuffer.
+    steps = max(1, int(settle_s * 20))
+    for _ in range(steps):
+        root.update_idletasks()
+        root.update()
+        time.sleep(settle_s / steps)
+    root.update_idletasks()
+    root.update()
+    display = os.environ.get("DISPLAY", ":0")
+    screen = ImageGrab.grab(xdisplay=display)
+    x, y = root.winfo_rootx(), root.winfo_rooty()
+    w, h = root.winfo_width(), root.winfo_height()
+    cropped = crop_to_window(screen, x, y, w, h)
+    cropped.save(path)
+    return f"{cropped.size[0]}x{cropped.size[1]} {cropped.mode}"
+
+
+def crop_to_window(screen, x: int, y: int, w: int, h: int):
+    """Crop `screen` (a PIL image) to the window at (x, y) of size (w, h),
+    clamped to the screen bounds. Pure — unit-testable without a display."""
+    x0 = max(0, min(x, screen.width - 1))
+    y0 = max(0, min(y, screen.height - 1))
+    x1 = min(screen.width, x0 + max(0, w))
+    y1 = min(screen.height, y0 + max(0, h))
+    if x1 <= x0 or y1 <= y0:
+        return screen  # degenerate geometry: fall back to full screen
+    return screen.crop((x0, y0, x1, y1))
+
+
 def _add_runtime_opts(p: argparse.ArgumentParser, need_llama: bool) -> None:
     p.add_argument("--state-dir", required=True, help="runtime state dir (slots.json, pids/, logs/)")
     p.add_argument("--slot", type=int, default=None, help="slot number (default: all in slots.json)")
@@ -198,6 +282,15 @@ def build_parser() -> argparse.ArgumentParser:
     spv.add_argument("--llama-bin", required=True)
     spv.add_argument("--roc-vendor", default=None)
     spv.set_defaults(func=cmd_supervisor)
+
+    u = sub.add_parser("ui", help="launch the control UI (16-slot grid)")
+    u.add_argument("--state-dir", default=None, help="dev state dir with slots.json")
+    u.add_argument("--fleet-dir", default=None,
+                   help="production fleet dir (read-only prod view)")
+    u.add_argument("--llama-bin", default=None, help="path to llama-server")
+    u.add_argument("--screenshot", default=None,
+                   help="capture one frame to this PNG path and exit")
+    u.set_defaults(func=cmd_ui)
     return p
 
 
