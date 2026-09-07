@@ -302,6 +302,17 @@ def verify_reconnect(slot: SlotConfig, timeout: float = 3.0,
     return False, f"model mismatch: slot={slot.model!r} served={sorted(names)[:3]}"
 
 
+def sync_slot(config_path: str, slot: SlotConfig, host: str = "127.0.0.1",
+              dry_run: bool = True) -> tuple[list[str], bool, str]:
+    """One-shot glue used by the UI control path: (re)write this slot's
+    provider block, then probe the reconnect. Returns (changed, ok, detail).
+    dry_run=True reports what would change without writing (and still probes).
+    """
+    changed = apply(config_path, [slot], {slot.slot: slot.model}, host=host, dry_run=dry_run)
+    ok, detail = verify_reconnect(slot, host=host)
+    return changed, ok, detail
+
+
 def wait_reconnect(slot: SlotConfig, timeout: float = 60.0,
                    host: str = "127.0.0.1") -> tuple[bool, str]:
     """Poll verify_reconnect until ok or timeout (auto-reconnect loop)."""

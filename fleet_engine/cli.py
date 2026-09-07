@@ -181,7 +181,8 @@ def cmd_ui(args: argparse.Namespace) -> int:
     model.update_health()
 
     root = tk.Tk()
-    Panel(root, model, runtime, state_dir=args.state_dir or "")
+    Panel(root, model, runtime, state_dir=args.state_dir or "",
+          hermes_config=getattr(args, "hermes_config", None) or "")
     if args.screenshot:
         root.update_idletasks()
         root.update()
@@ -366,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--fleet-dir", default=None,
                    help="production fleet dir (read-only prod view)")
     u.add_argument("--llama-bin", default=None, help="path to llama-server")
+    u.add_argument("--hermes-config", default=None,
+                   help="Hermes config.yaml to sync on slot start/restart (dev slots only)")
     u.add_argument("--screenshot", default=None,
                    help="capture one frame to this PNG path and exit")
     u.set_defaults(func=cmd_ui)

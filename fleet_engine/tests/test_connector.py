@@ -194,3 +194,48 @@ def test_verify_reconnect_mismatch_and_down():
         assert not ok2 and "unreachable" in _
     finally:
         srv.shutdown()
+
+
+def test_port_change_round_trip_full_flow(cfg_path):
+    """PLAN I phase-6 verification, end-to-end: change port in slots.json ->
+    provider block updated -> /model round-trip works without manual step ->
+    drift after an external edit -> re-apply restores sync."""
+    # Server "moves" from port A to port B (simulating a slot restart on a new port)
+    srv_a = HTTPServer(("127.0.0.1", 0), _Handler)
+    port_a = srv_a.server_address[1]
+    srv_b = HTTPServer(("127.0.0.1", 0), _Handler)
+    port_b = srv_b.server_address[1]
+    ta = threading.Thread(target=srv_a.serve_forever, daemon=True)
+    tb = threading.Thread(target=srv_b.serve_forever, daemon=True)
+    ta.start()
+    tb.start()
+    try:
+        # Step 1: register slot at port A
+        slot_a = make_slot(1, port_a)
+        changed = connector.apply(cfg_path, [slot_a], {1: GGUF}, dry_run=False)
+        assert changed == ["v620-1"]
+        ok, _ = connector.verify_reconnect(slot_a)
+        assert ok
+        assert connector.check_drift(cfg_path, slot_a, GGUF) == []
+
+        # Step 2: port changed in slots.json -> connector rewrites the block
+        slot_b = make_slot(1, port_b)
+        changed = connector.apply(cfg_path, [slot_b], {1: GGUF}, dry_run=False)
+        assert changed == ["v620-1"]
+        ok, _ = connector.verify_reconnect(slot_b)
+        assert ok, "round-trip must work on the new port without manual step"
+        assert connector.check_drift(cfg_path, slot_b, GGUF) == []
+        # the old port's value is gone from the managed block
+        assert f":{port_a}/v1" not in open(cfg_path).read()
+
+        # Step 3: external edit creates drift; re-apply repairs it
+        text = open(cfg_path).read()
+        open(cfg_path, "w").write(text.replace(f":{port_b}/v1", ":99999/v1"))
+        drifts = connector.check_drift(cfg_path, slot_b, GGUF)
+        assert [d.field for d in drifts] == ["base_url"]
+        assert connector.apply(cfg_path, [slot_b], {1: GGUF}, dry_run=False) == ["v620-1"]
+        assert connector.check_drift(cfg_path, slot_b, GGUF) == []
+        assert connector.apply(cfg_path, [slot_b], {1: GGUF}, dry_run=False) == []  # idempotent
+    finally:
+        srv_a.shutdown()
+        srv_b.shutdown()

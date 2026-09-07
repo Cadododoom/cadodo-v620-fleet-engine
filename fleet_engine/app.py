@@ -47,11 +47,12 @@ class Panel:
     one_shot() for headless screenshot mode."""
 
     def __init__(self, root, model: FleetModel, runtime=None,
-                 state_dir: str = "") -> None:
+                 state_dir: str = "", hermes_config: str = "") -> None:
         self.root = root
         self.model = model
         self.runtime = runtime  # Runtime or None (prod-only mode)
         self.state_dir = state_dir
+        self.hermes_config = hermes_config  # when set: slot start/restart syncs the provider block
         self._busy = False
         self._log_focus: Optional[int] = None  # slot shown in log viewer
         self._widgets: dict[int, dict] = {}
@@ -256,17 +257,28 @@ class Panel:
 
         def work() -> None:
             from .config_store import ConfigStore
+            from .connector import sync_slot
 
             try:
                 store = ConfigStore(rt.paths.slots_json())
                 cfg = store.get_slot(v.slot)
                 if op == "start":
                     rt.start(cfg, wait_ready=True)
+                    if self.hermes_config:
+                        changed, ok, detail = sync_slot(
+                            self.hermes_config, cfg, dry_run=False)
+                        print(f"conn slot {v.slot}: changed={changed or 'none'} "
+                              f"verify={'ok' if ok else 'FAIL'} ({detail})")
                 elif op == "stop":
                     rt.stop(cfg)
                 else:
                     rt.stop(cfg)
                     rt.start(cfg, wait_ready=True)
+                    if self.hermes_config:
+                        changed, ok, detail = sync_slot(
+                            self.hermes_config, cfg, dry_run=False)
+                        print(f"conn slot {v.slot}: changed={changed or 'none'} "
+                              f"verify={'ok' if ok else 'FAIL'} ({detail})")
             except Exception as e:  # noqa: BLE001 - surfaced in stderr
                 print(f"control {op} slot {v.slot}: {e}", file=sys.stderr)
             finally:
