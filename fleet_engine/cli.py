@@ -367,6 +367,74 @@ def cmd_opc_turn(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    """Run the standardized benchmark suite against one or more endpoints.
+
+    --endpoint takes a comma list of base URLs or ports (bare ports mean
+    127.0.0.1). --all-dev / --all-prod expand to the dev (45798-45801) or
+    prod (45600-45603) endpoint sets on --host.
+    """
+    import sys
+
+    from bench.client import run_suite
+    from bench.report import build_report, write_report
+
+    host = args.host
+    endpoints = []
+    if args.endpoint:
+        for tok in args.endpoint.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            endpoints.append(tok if tok.startswith("http") else f"http://{host}:{tok}/v1")
+    elif args.all_dev:
+        endpoints = [f"http://{host}:{p}/v1" for p in (45798, 45799, 45800, 45801)]
+    elif args.all_prod:
+        endpoints = [f"http://{host}:{p}/v1" for p in (45600, 45601, 45602, 45603)]
+    else:
+        print("no endpoints given (use --endpoint, --all-dev, or --all-prod)", file=sys.stderr)
+        return 1
+    prompts = [x.strip() for x in args.prompts.split(",") if x.strip()] or None
+    results = []
+    rc = 0
+    for ep in endpoints:
+        try:
+            import json as _json
+            from urllib.request import urlopen as _uop
+            with _uop(ep.rstrip("/") + "/models", timeout=5) as r:
+                names = [m.get("name", m.get("id", "")) for m in _json.load(r).get("models", [])]
+            model = args.model or (names[0] if names else "unknown")
+        except Exception:
+            print(f"[FAIL] {ep} unreachable for /models", file=sys.stderr)
+            rc = 1
+            continue
+        res = run_suite(ep, model, prompts=prompts, concurrency=args.concurrency,
+                        timeout=args.timeout, log=print)
+        results.append(res)
+        if res.ok_count == 0:
+            rc = 1
+    if results:
+        log_paths = {
+            r.port: lp
+            for r, lp in zip(results, [x for x in args.logs.split(",") if x], strict=False)
+            if lp
+        }
+        report = build_report(
+            results,
+            slot_log_paths=log_paths,
+            meta={
+                "host": host,
+                "model": args.model or "(per-endpoint)",
+                "concurrency": args.concurrency,
+                "prompt_set": prompts or "default(3)",
+            },
+        )
+        jpath, mpath = write_report(report, args.out_dir, stem=args.stem)
+        print(f"report: {jpath}")
+        print(f"        {mpath}")
+    return rc
+
+
 def _add_conn_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--state-dir", required=True, help="runtime state dir with slots.json")
     p.add_argument("--config", required=True, help="Hermes config.yaml path (managed blocks live here)")
@@ -458,6 +526,23 @@ def build_parser() -> argparse.ArgumentParser:
                             help="path to opencode binary for a real end-to-end turn")
             cp.add_argument("--prompt", default="Reply with the single word: ok")
         cp.set_defaults(func=func)
+
+    b = sub.add_parser("bench", help="run the standardized benchmark suite")
+    b.add_argument("--endpoint", default=None,
+                   help="comma list of ports or base URLs (bare port -> --host)")
+    b.add_argument("--all-dev", action="store_true", help="dev set 45798-45801 on --host")
+    b.add_argument("--all-prod", action="store_true", help="prod set 45600-45603 on --host (read-only)")
+    b.add_argument("--host", default="127.0.0.1")
+    b.add_argument("--model", default=None, help="model id (default: first /v1/models entry)")
+    b.add_argument("--prompts", default=None,
+                   help="comma list of prompt names (default: all 3)")
+    b.add_argument("--concurrency", type=int, default=1)
+    b.add_argument("--timeout", type=float, default=600.0, help="per-request timeout s")
+    b.add_argument("--logs", default="",
+                   help="comma list of llama-server log paths (one per endpoint) for spec stats")
+    b.add_argument("--out-dir", default="bench/results")
+    b.add_argument("--stem", default="bench")
+    b.set_defaults(func=cmd_bench)
 
     oa = sub.add_parser("opc-apply", help="write OpenCode provider entries")
     _add_conn_opts(oa)
