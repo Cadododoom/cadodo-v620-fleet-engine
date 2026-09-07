@@ -23,6 +23,7 @@ use ports 45700+ and their own state dir; production lanes are untouched.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -237,6 +238,83 @@ def crop_to_window(screen, x: int, y: int, w: int, h: int):
     return screen.crop((x0, y0, x1, y1))
 
 
+def _conn_slots(args: argparse.Namespace) -> list:
+    """Load SlotConfigs for --slot N (default: all) from --state-dir/slots.json."""
+    from .config_store import ConfigStore, slot_from_dict
+    store = ConfigStore(os.path.join(args.state_dir, "slots.json"))
+    data = store.load()
+    ids = sorted(int(k) for k in data.get("slots", {}))
+    if args.slot is not None:
+        ids = [i for i in ids if i == args.slot]
+    return [slot_from_dict(data["slots"][str(i)], i) for i in ids]
+
+
+def _conn_model_names(slots: list) -> dict[int, str]:
+    """Model string per slot: the GGUF path from slots.json (prod convention)."""
+    return {s.slot: s.model for s in slots}
+
+
+def cmd_conn_preview(args: argparse.Namespace) -> int:
+    from .connector import diff_preview
+    slots = _conn_slots(args)
+    if not slots:
+        print("no slots selected", file=sys.stderr)
+        return 1
+    print(diff_preview(args.config, slots, _conn_model_names(slots), host=args.host))
+    return 0
+
+
+def cmd_conn_apply(args: argparse.Namespace) -> int:
+    from .connector import apply as conn_apply
+    slots = _conn_slots(args)
+    if not slots:
+        print("no slots selected", file=sys.stderr)
+        return 1
+    changed = conn_apply(
+        args.config, slots, _conn_model_names(slots), host=args.host,
+        dry_run=args.dry_run, backup=not args.no_backup,
+    )
+    mode = "DRY-RUN" if args.dry_run else "APPLIED"
+    if changed:
+        print(f"[{mode}] changed: {', '.join(changed)}")
+    else:
+        print(f"[{mode}] no changes needed")
+    return 0
+
+
+def cmd_conn_drift(args: argparse.Namespace) -> int:
+    from .connector import check_drift
+    slots = _conn_slots(args)
+    drifts = []
+    for s in slots:
+        drifts.extend(check_drift(args.config, s, s.model, host=args.host))
+    if drifts:
+        for d in drifts:
+            print(f"DRIFT {d}")
+        return 2
+    print(f"no drift across {len(slots)} slot(s)")
+    return 0
+
+
+def cmd_conn_verify(args: argparse.Namespace) -> int:
+    from .connector import verify_reconnect
+    slots = _conn_slots(args)
+    rc = 0
+    for s in slots:
+        ok, detail = verify_reconnect(s, host=args.host)
+        print(f"[{'ok' if ok else 'DOWN'}] {s.name} :{s.port} — {detail}")
+        if not ok:
+            rc = 1
+    return rc
+
+
+def _add_conn_opts(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--state-dir", required=True, help="runtime state dir with slots.json")
+    p.add_argument("--config", required=True, help="Hermes config.yaml path (managed blocks live here)")
+    p.add_argument("--slot", type=int, default=None, help="slot number (default: all)")
+    p.add_argument("--host", default="127.0.0.1", help="host used in base_url / probes")
+
+
 def _add_runtime_opts(p: argparse.ArgumentParser, need_llama: bool) -> None:
     p.add_argument("--state-dir", required=True, help="runtime state dir (slots.json, pids/, logs/)")
     p.add_argument("--slot", type=int, default=None, help="slot number (default: all in slots.json)")
@@ -291,6 +369,21 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--screenshot", default=None,
                    help="capture one frame to this PNG path and exit")
     u.set_defaults(func=cmd_ui)
+
+    for name, func, help_ in (
+        ("conn-preview", cmd_conn_preview, "preview managed provider blocks (no writes)"),
+        ("conn-drift", cmd_conn_drift, "read-only drift check: config vs slots.json"),
+        ("conn-verify", cmd_conn_verify, "reconnect probe: /v1/models per slot"),
+    ):
+        cp = sub.add_parser(name, help=help_)
+        _add_conn_opts(cp)
+        cp.set_defaults(func=func)
+
+    ca = sub.add_parser("conn-apply", help="write managed provider blocks into config")
+    _add_conn_opts(ca)
+    ca.add_argument("--dry-run", action="store_true", help="report changes without writing")
+    ca.add_argument("--no-backup", action="store_true", help="skip the .bak timestamped copy")
+    ca.set_defaults(func=cmd_conn_apply)
     return p
 
 

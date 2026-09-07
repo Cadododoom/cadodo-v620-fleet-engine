@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, "dev/*"]
   pull_request:
 
 jobs:
@@ -18,5 +18,5 @@ jobs:
         run: uvx ruff check fleet_engine
       - name: Unit tests (pytest)
         run: |
-          uv pip install --system pytest
+          uv pip install --system pytest pyyaml
           python -m pytest fleet_engine/tests -v

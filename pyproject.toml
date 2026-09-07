@@ -5,6 +5,7 @@ description = "Open-source inference engine + fleet control app for the Radeon P
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+dependencies = ["pyyaml"]
 
 [tool.ruff]
 line-length = 100
