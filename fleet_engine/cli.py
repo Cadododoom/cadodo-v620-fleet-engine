@@ -108,6 +108,21 @@ def cmd_start(args: argparse.Namespace) -> int:
         except (RuntimeError, FileNotFoundError, PermissionError, TimeoutError) as e:
             print(f"FAILED slot {cfg.slot}: {e}", file=sys.stderr)
             rc = 1
+            continue
+        if getattr(args, "harness_state_dir", None):
+            from .harness_link import HarnessLink, register_endpoint
+
+            link = HarnessLink(
+                slot=cfg.slot, name=cfg.name, port=cfg.port,
+                model=cfg.model, host=cfg.host if cfg.host != "0.0.0.0" else "127.0.0.1",
+            )
+            res = register_endpoint(link, args.harness_state_dir)
+            if res["ok"]:
+                print(f"harness: slot {cfg.slot} registered+verified "
+                      f"model={res.get('model')!r} {res.get('latency_ms')}ms")
+            else:
+                print(f"harness: slot {cfg.slot} registered but verify failed: {res.get('error')}",
+                      file=sys.stderr)
     return rc
 
 
@@ -121,6 +136,15 @@ def cmd_stop(args: argparse.Namespace) -> int:
         except Exception as e:  # noqa: BLE001 - report and continue
             print(f"stop failed slot {cfg.slot}: {e}", file=sys.stderr)
             rc = 1
+        if getattr(args, "harness_state_dir", None):
+            from .harness_link import HarnessLink, deregister_endpoint
+
+            res = deregister_endpoint(
+                HarnessLink(slot=cfg.slot, name=cfg.name, port=cfg.port,
+                            model=cfg.model, host="127.0.0.1"),
+                args.harness_state_dir,
+            )
+            print(f"harness: slot {cfg.slot} deregistered (removed={res['removed']})")
     return rc
 
 
@@ -137,13 +161,45 @@ def cmd_restart(args: argparse.Namespace) -> int:
     for sid in _slot_ids(rt, args.slot):
         cfg = rt.store.get_slot(sid)
         rt.stop(cfg, log_fn=print)
+        if getattr(args, "harness_state_dir", None):
+            from .harness_link import HarnessLink, deregister_endpoint
+
+            deregister_endpoint(
+                HarnessLink(slot=cfg.slot, name=cfg.name, port=cfg.port,
+                            model=cfg.model, host="127.0.0.1"),
+                args.harness_state_dir,
+            )
         try:
             pid = rt.start(cfg, wait_ready=not args.no_wait, log_fn=print)
             print(f"restarted slot {cfg.slot} {cfg.name} pid {pid}")
         except (RuntimeError, FileNotFoundError, PermissionError, TimeoutError) as e:
             print(f"FAILED restart slot {cfg.slot}: {e}", file=sys.stderr)
             rc = 1
+            continue
+        if getattr(args, "harness_state_dir", None):
+            from .harness_link import HarnessLink, register_endpoint
+
+            res = register_endpoint(
+                HarnessLink(slot=cfg.slot, name=cfg.name, port=cfg.port,
+                            model=cfg.model, host=cfg.host if cfg.host != "0.0.0.0" else "127.0.0.1"),
+                args.harness_state_dir,
+            )
+            print(f"harness: slot {cfg.slot} re-registered ok={res['ok']}")
     return rc
+
+
+def cmd_harness_sync(args: argparse.Namespace) -> int:
+    from .harness_link import run_sync_cycle
+
+    store = ConfigStore(os.path.join(args.state_dir, "slots.json"))
+    data = store.load()
+    slots: dict[str, int] = {}
+    for k in data.get("slots", {}):
+        cfg = store.get_slot(int(k))
+        slots[f"g{cfg.slot}"] = cfg.port
+    res = run_sync_cycle(args.harness_dir, args.harness_state_dir, slots)
+    print(json.dumps(res, indent=2))
+    return 0 if res.get("ok") else 1
 
 
 def cmd_supervisor(args: argparse.Namespace) -> int:
@@ -489,6 +545,10 @@ def _add_runtime_opts(p: argparse.ArgumentParser, need_llama: bool) -> None:
         p.add_argument("--llama-bin", default=None, help="path to llama-server")
         p.add_argument("--roc-vendor", default=None, help="ROCm vendor lib dir")
     p.add_argument("--no-wait", action="store_true", help="do not wait for /health readiness")
+    p.add_argument(
+        "--harness-state-dir", default=None,
+        help="harness runtime state dir (profiles.json); start/stop auto-register/deregister slots",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -527,6 +587,13 @@ def build_parser() -> argparse.ArgumentParser:
     spv.add_argument("--llama-bin", required=True)
     spv.add_argument("--roc-vendor", default=None)
     spv.set_defaults(func=cmd_supervisor)
+
+    hs = sub.add_parser("harness-sync",
+                        help="run one harness watch cycle over this engine's slots")
+    hs.add_argument("--state-dir", required=True, help="engine state dir with slots.json")
+    hs.add_argument("--harness-dir", required=True, help="cadodo-core-omni-harness repo root")
+    hs.add_argument("--harness-state-dir", required=True, help="harness runtime state dir (profiles.json)")
+    hs.set_defaults(func=cmd_harness_sync)
 
     u = sub.add_parser("ui", help="launch the control UI (16-slot grid)")
     u.add_argument("--state-dir", default=None, help="dev state dir with slots.json")
