@@ -463,6 +463,64 @@ def _add_tuner_opts(p: argparse.ArgumentParser, need_slot: bool) -> None:
     p.add_argument("--llama-bin", default=None, help="path to llama-server in argv")
 
 
+def cmd_set_power(args: argparse.Namespace) -> int:
+    """Apply a package power cap to one GPU (or report the hardware floor).
+
+    Default (no --watts): print every GPU's settable min/max range.
+    With --watts N: try to cap --gpu (or all detected V620 GPUs when
+    --all) at N watts. Refusals below the card's floor are reported,
+    never retried — on the V620 firmware here the floor is 250W.
+    """
+    from fleet_engine.power import power_range, set_power
+
+    rocm_smi = args.rocm_smi
+    if args.watts is None:
+        gpus = _target_gpus(args) if args.all else [args.gpu]
+        rc = 0
+        for g in gpus:
+            rng = power_range(rocm_smi, g)
+            if rng.error:
+                print(f"GPU{g}: error {rng.error}")
+                rc = 1
+                continue
+            print(f"GPU{g}: settable {rng.min_w}W..{rng.max_w}W"
+                  if rng.settable else f"GPU{g}: range unreadable (min={rng.min_w} max={rng.max_w})")
+        return rc
+    gpus = _target_gpus(args) if args.all else [args.gpu]
+    rc = 0
+    for g in gpus:
+        res = set_power(gpu=g, watts=args.watts, rocm_smi=rocm_smi)
+        if res["applied"]:
+            mn, mx = res["range"]["min"], res["range"]["max"]
+            rng_s = f"{mn:.0f}-{mx:.0f}W" if (mn and mx) else f"max={mx}W"
+            print(f"GPU{g}: cap applied at {args.watts}W (range {rng_s})")
+        else:
+            print(f"GPU{g}: NOT applied ({res['reason']})")
+            rc = 1
+    return rc
+
+
+def _target_gpus(args: argparse.Namespace) -> list[int]:
+    """GPU indices to act on: --all expands to detected V620 slots' gpu field
+    (falls back to 0..4 when detection is unavailable)."""
+    try:
+        from fleet_engine.config_store import ConfigStore
+        from fleet_engine.detector import detect_v620_slots
+        if getattr(args, "state_dir", None):
+            store = ConfigStore(args.state_dir)
+            data = store.load()
+            gpus = sorted({int(s["gpu"]) for s in data["slots"].values()})
+            if gpus:
+                return gpus
+    except (OSError, KeyError, ValueError):
+        pass
+    try:
+        det = detect_v620_slots()
+        return list(range(len(det.slots)))
+    except Exception:
+        return [0, 1, 2, 3, 4]
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     """Run the standardized benchmark suite against one or more endpoints.
 
@@ -490,7 +548,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
     else:
         print("no endpoints given (use --endpoint, --all-dev, or --all-prod)", file=sys.stderr)
         return 1
-    prompts = [x.strip() for x in args.prompts.split(",") if x.strip()] or None
+    prompts = ([x.strip() for x in args.prompts.split(",") if x.strip()]
+               if args.prompts else None)
     results = []
     rc = 0
     for ep in endpoints:
@@ -594,6 +653,15 @@ def build_parser() -> argparse.ArgumentParser:
     hs.add_argument("--harness-dir", required=True, help="cadodo-core-omni-harness repo root")
     hs.add_argument("--harness-state-dir", required=True, help="harness runtime state dir (profiles.json)")
     hs.set_defaults(func=cmd_harness_sync)
+
+    sp = sub.add_parser("set-power", help="power-cap control (report range or apply a cap)")
+    sp.add_argument("--state-dir", default=None, help="state dir (for --all slot->gpu map)")
+    sp.add_argument("--gpu", type=int, default=0, help="target rocm GPU index")
+    sp.add_argument("--watts", type=int, default=None,
+                    help="cap to apply (omit to just print the settable range)")
+    sp.add_argument("--all", action="store_true", help="act on all slot GPUs in slots.json")
+    sp.add_argument("--rocm-smi", default="rocm-smi", help="rocm-smi binary path")
+    sp.set_defaults(func=cmd_set_power)
 
     u = sub.add_parser("ui", help="launch the control UI (16-slot grid)")
     u.add_argument("--state-dir", default=None, help="dev state dir with slots.json")
