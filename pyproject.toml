@@ -1,11 +1,11 @@
 [project]
 name = "cadodo-v620-fleet-engine"
-version = "0.1.0"
+version = "1.0.0"
 description = "Open-source inference engine + fleet control app for the Radeon Pro V620 (gfx1031), llama.cpp backend, up to 16 slots."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["pyyaml"]
+dependencies = ["pyyaml", "pillow"]
 
 [tool.ruff]
 line-length = 100

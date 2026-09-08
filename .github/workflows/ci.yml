@@ -18,5 +18,5 @@ jobs:
         run: uvx ruff check fleet_engine
       - name: Unit tests (pytest)
         run: |
-          uv pip install --system pytest pyyaml
+          uv pip install --system pytest pyyaml pillow
           python -m pytest fleet_engine/tests -v
